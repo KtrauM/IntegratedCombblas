@@ -299,8 +299,8 @@ public:
 	void Reset();
 	NT GetLocalElement(IT indx);
 	void BulkSet(IT inds[], int count);
-    std::vector<IT> GetLocalInd (){std::vector<IT> rind = ind; return rind;};
-    std::vector<NT> GetLocalNum (){std::vector<NT> rnum = num; return rnum;};
+    std::vector<IT> const& GetLocalInd () const {return ind;};
+    std::vector<NT> const& GetLocalNum () const {return num;};
     
     template <typename _Predicate>
     FullyDistVec<IT,IT> FindInds(_Predicate pred) const;

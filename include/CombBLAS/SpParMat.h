@@ -84,6 +84,8 @@ public:
 
 	template <class DELIT>
 	SpParMat (const DistEdgeList< DELIT > & rhs, bool removeloops = true);	// conversion from distributed edge list
+        template <class DELIT>
+        SpParMat (const std::vector<std::pair<DELIT,DELIT>> & rhs, std::size_t globalV, MPI_Comm comm, bool removeloops = true);	// conversion from distributed edge list
 
 	SpParMat (const SpParMat< IT,NT,DER > & rhs);				// copy constructor
     

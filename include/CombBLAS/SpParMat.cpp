@@ -3261,6 +3261,107 @@ SpParMat< IT,NT,DER >::SpParMat (const DistEdgeList<DELIT> & DEL, bool removeloo
 }
 
 template <class IT, class NT, class DER>
+template <class DELIT>
+SpParMat< IT,NT,DER >::SpParMat (const std::vector<std::pair<DELIT, DELIT>>& DEL, std::size_t globalV, MPI_Comm comm, bool removeloops)
+{
+	// commGrid = DEL.commGrid;
+        commGrid.reset(new CommGrid(comm, 0, 0));
+        typedef typename DER::LocalIT LIT;
+
+	int nprocs = commGrid->GetSize();
+	int gridrows = commGrid->GetGridRows();
+	int gridcols = commGrid->GetGridCols();
+	std::vector< std::vector<LIT> > data(nprocs);	// enties are pre-converted to local indices before getting pushed into "data"
+
+	LIT m_perproc = globalV / gridrows;
+	LIT n_perproc = globalV / gridcols;
+
+	if(sizeof(LIT) < sizeof(DELIT))
+	{
+		std::ostringstream outs;
+		outs << "Warning: Using smaller indices for the matrix than DistEdgeList\n";
+		outs << "Local matrices are " << m_perproc << "-by-" << n_perproc << std::endl;
+		SpParHelper::Print(outs.str(), commGrid->GetWorld());   // commgrid initialized
+	}	
+	
+    LIT stages = MEM_EFFICIENT_STAGES;		// to lower memory consumption, form sparse matrix in stages
+	
+	// even if local indices (LIT) are 32-bits, we should work with 64-bits for global info
+        int64_t perstage = DEL.size() / stages;
+	LIT totrecv = 0;
+	std::vector<LIT> alledges;
+    
+	for(LIT s=0; s< stages; ++s)
+	{
+		int64_t n_befor = s*perstage;
+		int64_t n_after= ((s==(stages-1))? DEL.size() : ((s+1)*perstage));
+
+		// clear the source vertex by setting it to -1
+		int realedges = 0;	// these are "local" realedges
+
+
+		for (int64_t i = n_befor; i < n_after; i++)
+		  {
+		    if(DEL[i].first >= 0 && DEL[i].second >= 0)	// otherwise skip
+		      {
+			IT lrow, lcol;
+			int owner = Owner(globalV, globalV, DEL[i].first, DEL[i].second, lrow, lcol);
+			data[owner].push_back(lrow);
+			data[owner].push_back(lcol);
+			++realedges;
+		      }
+		  }
+
+
+  		LIT * sendbuf = new LIT[2*realedges];
+		int * sendcnt = new int[nprocs];
+		int * sdispls = new int[nprocs];
+		for(int i=0; i<nprocs; ++i)
+			sendcnt[i] = data[i].size();
+
+		int * rdispls = new int[nprocs];
+		int * recvcnt = new int[nprocs];
+		MPI_Alltoall(sendcnt, 1, MPI_INT, recvcnt, 1, MPI_INT,commGrid->GetWorld()); // share the counts
+
+		sdispls[0] = 0;
+		rdispls[0] = 0;
+		for(int i=0; i<nprocs-1; ++i)
+		{
+			sdispls[i+1] = sdispls[i] + sendcnt[i];
+			rdispls[i+1] = rdispls[i] + recvcnt[i];
+		}
+		for(int i=0; i<nprocs; ++i)
+			std::copy(data[i].begin(), data[i].end(), sendbuf+sdispls[i]);
+		
+		// clear memory
+		for(int i=0; i<nprocs; ++i)
+			std::vector<LIT>().swap(data[i]);
+
+		// ABAB: Total number of edges received might not be LIT-addressible
+		// However, each edge_id is LIT-addressible
+		IT thisrecv = std::accumulate(recvcnt,recvcnt+nprocs, static_cast<IT>(0));	// thisrecv = 2*locedges
+		LIT * recvbuf = new LIT[thisrecv];
+		totrecv += thisrecv;
+			
+		MPI_Alltoallv(sendbuf, sendcnt, sdispls, MPIType<LIT>(), recvbuf, recvcnt, rdispls, MPIType<LIT>(), commGrid->GetWorld());
+		DeleteAll(sendcnt, recvcnt, sdispls, rdispls,sendbuf);
+    std::copy (recvbuf,recvbuf+thisrecv,std::back_inserter(alledges));	// copy to all edges
+		delete [] recvbuf;
+	}
+
+	int myprocrow = commGrid->GetRankInProcCol();
+	int myproccol = commGrid->GetRankInProcRow();
+	LIT locrows, loccols; 
+	if(myprocrow != gridrows-1)	locrows = m_perproc;
+	else 	locrows = globalV - myprocrow * m_perproc;
+	if(myproccol != gridcols-1)	loccols = n_perproc;
+	else	loccols = globalV - myproccol * n_perproc;
+
+  	SpTuples<LIT,NT> A(totrecv/2, locrows, loccols, alledges, removeloops);  	// alledges is empty upon return
+  	spSeq = new DER(A,false);        // Convert SpTuples to DER
+}
+
+template <class IT, class NT, class DER>
 IT SpParMat<IT,NT,DER>::RemoveLoops()
 {
 	MPI_Comm DiagWorld = commGrid->GetDiagWorld();
