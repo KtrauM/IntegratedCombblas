@@ -380,7 +380,7 @@ FullyDistVec<IT, IT> Interpret(SpParMat<IT,NT,DER> & A)
     A += AT;
     SpParHelper::Print("Finding connected components....\n");
     
-    FullyDistVec<IT, IT> cclabels = CC(A, nCC);
+    FullyDistVec<IT, IT> cclabels = lacc::CC(A, nCC);
     return cclabels;
 }
 
