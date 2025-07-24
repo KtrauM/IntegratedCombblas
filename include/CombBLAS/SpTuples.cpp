@@ -117,7 +117,9 @@ SpTuples<IT,NT>::SpTuples (int64_t maxnnz, IT nRow, IT nCol, std::vector<IT> & e
 	}
 	assert(j == nnz);
 
-    delete [] tuples;
+	if(maxnnz > 0) {
+	  delete [] tuples;
+	}
 	tuples = ntuples;
     isOperatorNew = false;
 }
