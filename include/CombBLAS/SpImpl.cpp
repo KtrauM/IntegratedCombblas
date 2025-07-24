@@ -260,10 +260,12 @@ void SpImpl<SR,IT,bool,IVT,OVT>::SpMXSpV(const Dcsc<IT,bool> & Adcsc, int32_t mA
 	{
 		sort(nzinds[p].begin(), nzinds[p].end());
 		cnts[p] = nzinds[p].size();
-		int32_t * locnzinds = &nzinds[p][0];
-		int32_t offset = perproc * p;
+		// int32_t * locnzinds = &nzinds[p][0]; //NUHL
+		// int32_t offset = perproc * p;
 		for(int i=0; i< cnts[p]; ++i)
 		{
+		        int32_t * locnzinds = &nzinds[p][0]; // NUHL invalid access
+		        int32_t offset = perproc * p;
 			indy[dspls[p]+i] = locnzinds[i] - offset;	// convert to local offset
 			numy[dspls[p]+i] = localy[locnzinds[i]]; 	
 		}
