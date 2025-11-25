@@ -47,7 +47,6 @@ double cblas_transvectime;
 double cblas_localspmvtime;
 
 #define ITERS 1
-#define EDGEFACTOR 16
 using namespace std;
 using namespace combblas;
 
@@ -62,8 +61,8 @@ int main(int argc, char* argv[])
 	{
 		if(myrank == 0)
 		{
-			cout << "Usage: ./tdbfs <KaGen> <KaGen Options>" << endl;
-			cout << "Example: ./tdbfs KaGen 'gnm-undirected;n=12;m=15'" << endl;
+			cout << "Usage: ./ccbfs <KaGen> <KaGen Options>" << endl;
+			cout << "Example: ./ccbfs KaGen 'gnm-undirected;n=12;m=15'" << endl;
 		}
 		MPI_Finalize();
 		return -1;
@@ -96,7 +95,7 @@ int main(int argc, char* argv[])
 			// Generate graph using option string
 			kagen::Graph graph = gen.GenerateFromOptionString(options);
 
-			// Convert KaGen graph to CombBLAS format using clean API from KaCC
+			// Convert KaGen graph to CombBLAS format using clean API
 			auto globaln = graph.NumberOfGlobalVertices();
 			auto edges = graph.TakeEdges();
 
@@ -109,7 +108,7 @@ int main(int argc, char* argv[])
 			// Create the CombBLAS matrix from the local edge list
 			A.ReadFromLocalEdgeList(edge_list, globaln, combblas::maximum<bool>());
 			
-			// Calculate degrees before symmetrization
+			// Calculate degrees before conversion
 			PSpMat_Int64 * G = new PSpMat_Int64(A); 
 			G->Reduce(degrees, Row, plus<int64_t>(), static_cast<int64_t>(0));	// identity is 0 
 			delete G;
@@ -122,6 +121,10 @@ int main(int argc, char* argv[])
 		}
 		else 
 		{
+			if(myrank == 0)
+			{
+				cout << "Unknown option. Only KaGen is supported." << endl;
+			}
 			MPI_Finalize();
 			return -1;	
 		}
@@ -152,22 +155,22 @@ int main(int argc, char* argv[])
 					     << local_rows << " rows x " << local_cols << " cols, "
 					     << local_nnz << " non-zeros" << endl;
 					
-				// Output some local degree information
-				int64_t first_vertex_idx = degrees.LocArrSize() > 0 ? degrees.LengthUntil() : 0;
-				int64_t num_local_vertices = degrees.LocArrSize();
-				
-				if(num_local_vertices > 0) {
-					cout << "  Local vertex range: [" << first_vertex_idx 
-					     << ", " << (first_vertex_idx + num_local_vertices) << ")" << endl;
+					// Output some local degree information
+					int64_t first_vertex_idx = degrees.LocArrSize() > 0 ? degrees.LengthUntil() : 0;
+					int64_t num_local_vertices = degrees.LocArrSize();
 					
-					// Print first few vertices and their degrees
-					int64_t max_vertices_to_print = min((int64_t)10, num_local_vertices);
-					cout << "  First " << max_vertices_to_print << " vertices and degrees:" << endl;
-					for(int64_t i = 0; i < max_vertices_to_print; ++i) {
-						cout << "    Vertex " << (first_vertex_idx + i) 
-						     << " degree: " << degrees.GetLocalElement(i) << endl;
+					if(num_local_vertices > 0) {
+						cout << "  Local vertex range: [" << first_vertex_idx 
+						     << ", " << (first_vertex_idx + num_local_vertices) << ")" << endl;
+						
+						// Print first few vertices and their degrees
+						int64_t max_vertices_to_print = min((int64_t)10, num_local_vertices);
+						cout << "  First " << max_vertices_to_print << " vertices and degrees:" << endl;
+						for(int64_t i = 0; i < max_vertices_to_print; ++i) {
+							cout << "    Vertex " << (first_vertex_idx + i) 
+							     << " degree: " << degrees.GetLocalElement(i) << endl;
+						}
 					}
-				}
 				}
 				MPI_Barrier(MPI_COMM_WORLD);
 			}
@@ -180,80 +183,66 @@ int main(int argc, char* argv[])
 		MPI_Barrier(MPI_COMM_WORLD);
 		double t1 = MPI_Wtime();
 
-		// Randomly pick ITERS many vertices as starting vertices
-		FullyDistVec<int64_t, int64_t> Cands(ITERS, 0);
 		double nver = (double) degrees.TotalLength();
 
-#ifdef DETERMINISTIC
-		MTRand M(1);
-#else
-		MTRand M;	// generate random numbers with Mersenne Twister 
-#endif
-		vector<double> loccands(ITERS);
-		vector<int64_t> loccandints(ITERS);
-		if(myrank == 0)
-		{
-			loccands[0] = 0;
-			transform(loccands.begin(), loccands.end(), loccands.begin(), bind( multiplies<double>(), std::placeholders::_1, nver ));
-			loccandints[0] = static_cast<int64_t>(loccands[0]);
-		}
-		MPI_Bcast(&(loccandints[0]), ITERS, MPIType<int64_t>(),0,MPI_COMM_WORLD);
-		Cands.SetElement(0, 0);
-
-		#define MAXTRIALS 1
-		double bfs_total_start = MPI_Wtime();
-		for(int trials =0; trials < MAXTRIALS; trials++)	// try different algorithms for BFS
+		MPI_Pcontrol(1,"BFSCC");
+		
+		FullyDistVec<int64_t, int64_t> parents ( Aeff.getcommgrid(), Aeff.getncol(), (int64_t) -1);	// identity is -1
+		uint64_t num_components = 0;
+		double cc_start = MPI_Wtime();
+		
+		for(int64_t vertex = 0; vertex < static_cast<int64_t>(nver);) 
 		{
 			cblas_allgathertime = 0;
 			cblas_alltoalltime = 0;
 			cblas_mergeconttime = 0;
 			cblas_transvectime  = 0;
 			cblas_localspmvtime = 0;
-			MPI_Pcontrol(1,"BFS");
+			MPI_Barrier(MPI_COMM_WORLD);
+			double bfs_iteration_start = MPI_Wtime();
+			++num_components;
 
-			double MTEPS[ITERS]; double INVMTEPS[ITERS]; double TIMES[ITERS]; double EDGES[ITERS];
-			for(int i=0; i<ITERS; ++i)
+			FullyDistSpVec<int64_t, int64_t> fringe(Aeff.getcommgrid(), Aeff.getncol());	// numerical values are stored 0-based
+			fringe.SetElement(vertex, vertex);
+			
+			int step = 0;
+			while(fringe.getnnz() > 0)
 			{
-				// FullyDistVec ( shared_ptr<CommGrid> grid, IT globallen, NT initval);
-				FullyDistVec<int64_t, int64_t> parents ( Aeff.getcommgrid(), Aeff.getncol(), (int64_t) -1);	// identity is -1
-
-				// FullyDistSpVec ( shared_ptr<CommGrid> grid, IT glen);
-				FullyDistSpVec<int64_t, int64_t> fringe(Aeff.getcommgrid(), Aeff.getncol());	// numerical values are stored 0-based
-
-				MPI_Barrier(MPI_COMM_WORLD);
-				double t1 = MPI_Wtime();
-
-				fringe.SetElement(Cands[i], Cands[i]);
-				int iterations = 0;
-				while(fringe.getnnz() > 0)
-				{
-					fringe.setNumToInd();
-					fringe = SpMV(Aeff, fringe,optbuf);	// SpMV with sparse vector (with indexisvalue flag preset), optimization enabled
-					fringe = EWiseMult(fringe, parents, true, (int64_t) -1);	// clean-up vertices that already has parents 
-					parents.Set(fringe);
-					iterations++;
-				}
-				MPI_Barrier(MPI_COMM_WORLD);
-				double t2 = MPI_Wtime();
-	
-				FullyDistSpVec<int64_t, int64_t> parentsp = parents.Find(bind(greater<int64_t>(), std::placeholders::_1, -1));
-				parentsp.Apply(myset<int64_t>(1));
-	
-				// we use degrees on the directed graph, so that we don't count the reverse edges in the teps score
-				int64_t nedges = EWiseMult(parentsp, degrees, false, (int64_t) 0).Reduce(plus<int64_t>(), (int64_t) 0);
-	
-				TIMES[i] = t2-t1;
-				EDGES[i] = nedges;
-				MTEPS[i] = static_cast<double>(nedges) / (t2-t1) / 1000000.0;
+				fringe.setNumToInd();
+				fringe = SpMV(Aeff, fringe, optbuf);	// SpMV with sparse vector (with indexisvalue flag preset), optimization enabled
+				fringe = EWiseMult(fringe, parents, true, (int64_t) -1);	// clean-up vertices that already has parents 
+				parents.Set(fringe);
+				step++;
 			}
-			MPI_Pcontrol(-1,"BFS");
+			MPI_Barrier(MPI_COMM_WORLD);
+			double bfs_iteration_end = MPI_Wtime();
+			
+			// Find next unvisited vertex
+			auto [next_vertex, parent] = parents.MinElement();
+			while (next_vertex == vertex) {
+				parents.SetElement(vertex, vertex);
+				std::tie(next_vertex, parent) = parents.MinElement();
+				if (parent != -1) {
+					break;
+				}
+			}
+			if (parent != -1) {
+				break;
+			}
+			vertex = next_vertex;
 		}
-		double bfs_total_end = MPI_Wtime();
-		if (myrank == 0) {
-			std::cout << "Runtime: " << (bfs_total_end - bfs_total_start) << std::endl;
-		}
+		
+		double cc_end = MPI_Wtime();
+		SpParHelper::Print("Finished\n");
+		SpParHelper::Print("Number of components: " + to_string(num_components) + "\n");
+		ostringstream os;
+		MPI_Pcontrol(-1,"BFSCC");
+
+		os << "CC runtime: " << (cc_end - cc_start) << "\n";
+		SpParHelper::Print(os.str());
 	}
 	MPI_Finalize();
 	return 0;
 }
+
 

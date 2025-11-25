@@ -29,6 +29,10 @@ target_include_directories(CombBLAS PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOU
 target_include_directories(CombBLAS PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/psort-1.0/include> $<INSTALL_INTERFACE:include>)
 target_include_directories(CombBLAS PRIVATE include/CombBLAS)
 
+# KaGen paths (use absolute path and build interface to avoid export issues)
+get_filename_component(KAGEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../external/KaGen" ABSOLUTE)
+target_include_directories(CombBLAS PUBLIC $<BUILD_INTERFACE:${KAGEN_ROOT}/kagen>)
+
 # MPI and OpenMP dependencies
 find_package(MPI REQUIRED)
 find_package(OpenMP)
@@ -56,6 +60,10 @@ target_link_libraries(CombBLAS PUBLIC Usortlib)
 
 add_subdirectory(graph500-1.2/generator)
 target_link_libraries(CombBLAS PUBLIC GraphGenlib)
+
+# Add KaGen as subdirectory (don't link to CombBLAS to avoid export issues)
+set(KAGEN_BUILD_APPS OFF CACHE BOOL "Don't build KaGen applications")
+add_subdirectory(${KAGEN_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/KaGen EXCLUDE_FROM_ALL)
 
 # Set up exported configuration
 # This allows CombBLAS to be installed in two ways:

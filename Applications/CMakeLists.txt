@@ -2,6 +2,7 @@
 
 
 ADD_EXECUTABLE( tdbfs TopDownBFS.cpp )
+ADD_EXECUTABLE( ccbfs ConnectedComponentBFS.cpp )
 ADD_EXECUTABLE( dobfs DirOptBFS.cpp )
 ADD_EXECUTABLE( fbfs FilteredBFS.cpp )
 ADD_EXECUTABLE( fmis FilteredMIS.cpp )
@@ -28,7 +29,8 @@ target_sources(fastsv-lib INTERFACE
 target_link_libraries(fastsv-lib INTERFACE CombBLAS)
 TARGET_LINK_LIBRARIES(fastsv PRIVATE fastsv-lib)
 
-TARGET_LINK_LIBRARIES( tdbfs CombBLAS)
+TARGET_LINK_LIBRARIES( tdbfs CombBLAS KaGen::KaGen)
+TARGET_LINK_LIBRARIES( ccbfs CombBLAS KaGen::KaGen)
 TARGET_LINK_LIBRARIES( dobfs CombBLAS)
 TARGET_LINK_LIBRARIES( fbfs CombBLAS)
 TARGET_LINK_LIBRARIES( fmis CombBLAS)
